@@ -4,10 +4,6 @@ terraform {
       source = "telmate/proxmox"
       version = "2.9.11"
     }
-    tls = {
-      source  = "hashicorp/tls"
-      version = "3.3.0"
-    }
   }
   required_version = ">= 0.13"
 }
