@@ -1,0 +1,86 @@
+# create-runner.yml
+
+- name: 'Deploy our Cloud-init VMs'
+
+  hosts: proxmox
+  tasks:
+
+# Clone proxmox vm template
+
+  - name: 'Clone template - {{ runner.vm_name }}'
+    community.general.proxmox_kvm:
+      node: '{{ proxmox.node_name }}'
+      name: '{{ runner.vm_name }}'
+      clone: '{{ runner.template_name }}'
+      api_user: '{{ proxmox.api_user }}'
+      api_password: '{{ proxmox.api_password }}'
+      api_host: '{{ proxmox.api_host }}'
+      timeout: 90
+
+# Update proxmox vm ip address
+
+  - name: 'Update {{ runner.vm_name }} ip'
+    community.general.proxmox_kvm:
+      node: '{{ proxmox.node_name }}'
+      name: '{{ runner.vm_name }}'
+      ipconfig:
+        ipconfig0: "ip={{ runner.ip }}/24,gw={{ runner.gw }}"
+      api_user: '{{ proxmox.api_user }}'
+      api_password: '{{ proxmox.api_password }}'
+      api_host: '{{ proxmox.api_host }}'
+      update: true
+
+# Start proxmox vm
+
+  - name: 'Start VM {{ runner.vm_name }}'
+    community.general.proxmox_kvm:
+      node: '{{ proxmox.node_name }}'
+      name: '{{ runner.vm_name }}'
+      api_user: '{{ proxmox.api_user }}'
+      api_password: '{{ proxmox.api_password }}'
+      api_host: '{{ proxmox.api_host }}'
+      state: started
+
+# Add vm ip address to group just_created in ansible inventory
+
+  - name: 'Add host {{ runner.vm_name }} to group just_created'
+    ansible.builtin.add_host:
+      hostname: '{{ runner.ip }}'
+      groups: just_created
+
+
+- name: add host keys
+  hosts: just_created
+  gather_facts: no
+  tasks:
+
+# Remove existing public ssh keys for runner ip in known_hosts
+
+  - name: run ssh-keyscan to remove keys in known_hosts
+    local_action: shell ssh-keygen -f ~/.ssh/known_hosts -R "{{ inventory_hostname }}"
+    retries: 10
+    delay: 3
+    register: result
+    until: result.rc == 0
+
+# Add public ssh key for deployed runner vm in known_hosts
+
+  - name: run ssh-keyscan to add keys in known_hosts
+    local_action: shell ssh-keyscan {{ inventory_hostname }} >> ~/.ssh/known_hosts
+    retries: 10
+    delay: 4
+    register: result
+    until: result.rc == 0
+
+- name: building runner
+  hosts: just_created
+  tasks:
+
+  - name: install gitlab runner
+    ansible.builtin.shell: |
+      sudo curl -L --output /usr/local/bin/gitlab-runner https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64
+      sudo chmod +x /usr/local/bin/gitlab-runner
+      sudo useradd --comment 'GitLab Runner' --create-home gitlab-runner --shell /bin/bash
+      sudo gitlab-runner install --user=gitlab-runner --working-directory=/home/gitlab-runner
+      sudo gitlab-runner start
+      sudo gitlab-runner register --url https://gitlab.com/ --registration-token {{ hostvars['PROXMOX_IP']['runner']['registration_token'] }} --executor shell --non-interactive
